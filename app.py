@@ -654,19 +654,20 @@ def run_app() -> None:
         st.markdown("### 快速问答")
         for row in range(0, len(SAMPLE_QUESTIONS), 2):
             c1, c2 = st.columns(2)
-            for col, question in zip((c1, c2), SAMPLE_QUESTIONS[row:row + 2]):
-                col.button(question, use_container_width=True, key=f"home_q_{row}_{len(question)}",
+            for offset, (col, question) in enumerate(zip((c1, c2), SAMPLE_QUESTIONS[row:row + 2])):
+                q_index = row + offset
+                col.button(question, use_container_width=True, key=f"home_q_{q_index}",
                            on_click=navigate_to, args=("💬 智能制度问答", question, None))
         st.markdown("### 常用工作流")
         for row in range(0, len(WORKFLOWS), 2):
             c1, c2 = st.columns(2)
             names = list(WORKFLOWS)[row:row + 2]
-            for col, name in zip((c1, c2), names):
+            for offset, (col, name) in enumerate(zip((c1, c2), names)):
                 with col.container(border=True):
                     st.markdown(f"**{name}**")
                     st.caption(WORKFLOWS[name]["description"])
                     target = "🔎 贷后检查记录" if name == "贷后检查与风险回访" else "📝 业务调查记录"
-                    st.button("打开工作流", key=f"open_workflow_{row}_{len(name)}", use_container_width=True,
+                    st.button("打开工作流", key=f"open_workflow_{row + offset}", use_container_width=True,
                               on_click=navigate_to, args=(target, None, name))
         st.info("推荐使用顺序：先用公开/模拟资料测试问答，再用工作流生成记录草稿，最后由经办人员核实。")
 
