@@ -19,7 +19,7 @@ from typing import Any
 
 BASE = Path(__file__).resolve().parent
 DATA_FILE = BASE / "data" / "policies.json"
-APP_VERSION = "v3.0"
+APP_VERSION = "v3.1 极简界面"
 NOTICE = (
     "本项目是比赛/学习演示原型，内置制度为虚构模拟文件，不代表浙江农信或任何成员行社的内部制度、产品政策或授权要求。"
     "当前应用未接入大语言模型，不作授信、准入、开户、反洗钱或合规结论。请勿在当前 Streamlit 公网演示站上传真实客户资料、"
@@ -577,268 +577,272 @@ def render_sources(st: Any, sources: list[dict]) -> None:
                 st.divider()
 
 
+
+# ---------------------------------------------------------------------------
+# 简洁版界面：只展示制度学习、合规流程、尽职调查三个主入口。
+# 现有后端检索/文件解析/工作流数据保留，以便和旧版数据兼容。
+# ---------------------------------------------------------------------------
+
+def learning_highlights(text: str, limit: int = 6) -> list[str]:
+    """仅提取原文中疑似重要的句子；不将关键词提取冒充 AI 解读。"""
+    raw = re.split(r"(?<=[。！？；;])\s*|\n{1,}", text)
+    triggers = ("应当", "必须", "不得", "严禁", "应", "负责", "调查", "核实", "审查", "审批", "留存", "保存", "报告", "风险", "尽职")
+    scored = []
+    for index, part in enumerate(raw):
+        line = re.sub(r"\s+", " ", part).strip()
+        if not 12 <= len(line) <= 330:
+            continue
+        matches = sum(bool(term in line) for term in triggers)
+        if matches:
+            scored.append((-matches, index, line))
+    # 先找相关性较高的句子，再按照原文顺序展示。
+    selected = sorted(sorted(scored)[:limit], key=lambda row: row[1])
+    return list(dict.fromkeys(item[2] for item in selected))
+
+
+def learning_headings(text: str, limit: int = 12) -> list[str]:
+    """提取明显的章节/条标题，不推断未出现的章节。"""
+    pattern = re.compile(r"^(?:第[一二三四五六七八九十百零〇0-9]+[章节条]|[一二三四五六七八九十]+[、.]|[0-9]+[.、）)])")
+    headings = []
+    for row in text.splitlines():
+        line = re.sub(r"\s+", " ", row).strip()
+        if 3 <= len(line) <= 90 and pattern.match(line):
+            headings.append(line)
+    return list(dict.fromkeys(headings))[:limit]
+
+
+def doc_hits(filename: str, text: str, question: str, limit: int = 3) -> list[dict]:
+    hits = []
+    for i, chunk in enumerate(chunk_text(text), 1):
+        score = score_text(question, filename, chunk, infer_intent(question))
+        if score >= 1.2:
+            hits.append({"doc": filename, "section_id": f"原文片段 {i}", "content": chunk,
+                         "source_type": "本次会话上传资料", "score": score,
+                         "version": "未核验", "effective_date": "待人工核对", "title": "原文摘录"})
+    hits.sort(key=lambda item: -item["score"])
+    return hits[:limit]
+
+
+def simple_checklist_report(name: str, checked: list[str], signals: list[str], notes: str) -> str:
+    template = WORKFLOWS[name]
+    out = [f"# 智规通 · 尽职调查学习核对表", "", f"业务类型：{name}",
+           f"生成日期：{date.today().isoformat()}", "",
+           "> 公开演示用途；通用工作参考，不是本行正式调查表，也不能证明已尽职。", "",
+           "## 一、核对事项"]
+    for item in template["checklist"]:
+        out.append(f"- [{'x' if item in checked else ' '}] {item}")
+    out.extend(["", "## 二、提示的待核风险线索"])
+    out.extend([f"- {item}" for item in signals] or ["- 暂未选择，不代表不存在风险。"])
+    out.extend(["", "## 三、补充学习笔记", notes.strip() or "（未填写）", "",
+                "## 四、使用边界", template["caution"],
+                "实际业务须由经办人员核实证据，按照本行有效制度履行调查、复核和审批。"])
+    return "\n".join(out)
+
+
 def run_app() -> None:
+    import hashlib
     import streamlit as st
 
-    st.set_page_config(page_title="智规通 v3.0｜客户经理工作台", page_icon="🏦", layout="wide", initial_sidebar_state="expanded")
+    st.set_page_config(page_title="智规通｜制度学习与合规尽调", page_icon="📘",
+                       layout="centered", initial_sidebar_state="collapsed")
     st.markdown("""
     <style>
-    .block-container{max-width:1240px;padding-top:1.1rem;padding-bottom:3rem}
-    .hero{background:linear-gradient(120deg,#102f4a,#1d5a78);padding:1.25rem 1.5rem;border-radius:18px;color:#fff;margin-bottom:1rem}
-    .hero h1{color:#fff;margin:.15rem 0 .35rem;font-size:2rem}.hero p{color:#dcebf5;margin:0}
-    div[data-testid="stMetric"]{background:rgba(90,130,160,.07);padding:.7rem;border-radius:12px}
-    div[data-testid="stChatMessage"]{border-radius:14px}
+      .block-container {max-width:890px;padding-top:1.45rem;padding-bottom:2.3rem}
+      .main .block-container h3 {padding-top:.5rem}
+      .zt-hero {background:linear-gradient(115deg,#173e55,#24617a);color:#fff;
+                border-radius:16px;padding:20px 25px;margin:1px 0 17px}
+      .zt-hero h1 {font-size:1.85rem;margin:0;color:#fff;letter-spacing:.02em}
+      .zt-hero p {margin:5px 0 0;color:#e2eff5;font-size:.94rem}
+      div[data-testid="stFileUploader"] {border-radius:12px}
+      div[data-testid="stExpander"] {border-radius:10px}
+      div[data-testid="stMetric"] {border-radius:10px}
+      .zt-tip {font-size:.85rem;color:#596979;margin:.4rem 0 1rem}
+      footer {visibility:hidden}
     </style>
+    <div class="zt-hero"><h1>📘 智规通</h1><p>读懂银行制度 · 查清合规流程 · 做好尽职调查</p></div>
     """, unsafe_allow_html=True)
+
+    # 在公开网站上持续展示使用边界，但避免占据过大的头部空间。
+    st.caption("🔒 公开演示：仅使用公开、模拟或获准外传的非敏感资料。不得上传总行保密文件或真实客户资料。")
 
     try:
         policies = load_policies()
     except Exception as exc:
-        st.error(f"无法读取知识库：{exc}")
-        st.info("请确认仓库根目录保留 data/policies.json。")
+        st.error(f"演示资料加载失败：{exc}")
+        st.info("请检查仓库中的 data/policies.json 是否仍然存在。")
         st.stop()
 
-    defaults = {"chat_history": [], "last_topic": None, "uploaded_docs": {}, "case_report": "", "nav_page": "🏠 客户经理工作台"}
-    for key, value in defaults.items():
-        if key not in st.session_state:
-            st.session_state[key] = value
+    if "uploaded_docs" not in st.session_state:
+        st.session_state.uploaded_docs = {}
+    if "last_upload_id" not in st.session_state:
+        st.session_state.last_upload_id = ""
+    if "upload_widget_version" not in st.session_state:
+        st.session_state.upload_widget_version = 0
+    if "study_result_query" not in st.session_state:
+        st.session_state.study_result_query = ""
+    if "minimal_page" not in st.session_state:
+        st.session_state.minimal_page = "📖 学制度"
 
-    def ask(question: str) -> None:
-        question = question.strip()[:1500]
-        if not question:
-            return
-        result = answer_question(question, policies, st.session_state.last_topic, st.session_state.uploaded_docs)
-        st.session_state.chat_history.append({"role": "user", "content": question})
-        st.session_state.chat_history.append({"role": "assistant", "content": result["text"], "sources": result["sources"], "topic": result["topic"], "intent": result["intent"]})
-        if result["topic"]:
-            st.session_state.last_topic = result["topic"]
+    def open_page(name: str, workflow: str | None = None) -> None:
+        st.session_state.minimal_page = name
+        if workflow is not None:
+            st.session_state.diligence_workflow = workflow
 
-    def navigate_to(target_page: str, question: str | None = None, workflow: str | None = None) -> None:
-        # Streamlit callbacks run before widgets are instantiated on the next rerun.
-        st.session_state.nav_page = target_page
-        if question:
-            st.session_state.pending_question = question
-        if workflow:
-            st.session_state.selected_workflow = workflow
+    page = st.radio("选择功能", ["📖 学制度", "🧭 查流程", "✅ 做尽调"],
+                    horizontal=True, key="minimal_page", label_visibility="collapsed")
+    st.divider()
 
-    st.markdown(f"""
-    <div class="hero"><div style="font-size:.78rem;letter-spacing:.1em;color:#bdd2df">RURAL COMMERCIAL BANKING · RELATIONSHIP MANAGER DESK · {APP_VERSION}</div>
-    <h1>🏦 智规通</h1><p>浙江农信成员行社通用演示版｜制度检索、客户经理工作流与合规辅助记录</p></div>
-    """, unsafe_allow_html=True)
-    st.warning(NOTICE, icon="⚠️")
+    if page == "📖 学制度":
+        st.subheader("学制度")
+        st.caption("上传一份文件，先看重点，再按问题查找相关原文。")
+        permitted = st.checkbox("我确认资料可以用于本公网演示站，不含内部保密或客户敏感信息。",
+                                key="upload_confirm")
+        uploaded = st.file_uploader("选择文件", type=["pdf", "docx", "txt", "md", "json"],
+                                    disabled=not permitted,
+                                    key=f"minimal_uploaded_file_{st.session_state.upload_widget_version}",
+                                    help="仅支持可提取文本的文件；扫描版 PDF 暂无法直接识别。")
+        if uploaded is not None and permitted:
+            blob = uploaded.getvalue()
+            if len(blob) > 10 * 1024 * 1024:
+                st.error("演示版单个文件请控制在 10MB 以内。")
+            else:
+                identifier = f"{uploaded.name}:{hashlib.sha256(blob).hexdigest()}"
+                if identifier != st.session_state.last_upload_id:
+                    try:
+                        value = extract_uploaded_text(uploaded.name, blob)
+                        if not value.strip():
+                            st.warning("没有提取到文字。若是扫描版 PDF，请先使用经过批准的工具处理为可搜索文本。")
+                        else:
+                            st.session_state.uploaded_docs = {uploaded.name: value}
+                            st.session_state.last_upload_id = identifier
+                            st.session_state.study_result_query = ""
+                            st.success("文件已经读取，可以开始学习。")
+                    except Exception as exc:
+                        st.error(f"读取失败：{exc}")
 
-    with st.sidebar:
-        st.markdown("## 🏦 智规通 v3.0")
-        st.caption("成员行社通用演示配置 · 待本行制度校准")
-        pages = ["🏠 客户经理工作台", "💬 智能制度问答", "📝 业务调查记录", "📋 业务核对清单", "🔎 贷后检查记录", "📂 制度资料导入", "📚 公开监管目录", "🔁 模拟制度版本对比", "ℹ️ 系统说明"]
-        page = st.radio("功能导航", pages, key="nav_page")
-        st.divider()
-        st.metric("模拟制度版本", len(policies))
-        st.metric("本次会话导入资料", len(st.session_state.uploaded_docs))
-        st.caption("当前无大模型 API；不产生模型 Token 费用。")
-        if st.session_state.chat_history:
-            st.download_button("⬇️ 导出问答记录", report_markdown(st.session_state.chat_history).encode("utf-8"), file_name="智规通问答记录.md", mime="text/markdown", use_container_width=True)
-            if st.button("清空问答记录", use_container_width=True):
-                st.session_state.chat_history = []
-                st.session_state.last_topic = None
+        current_docs = st.session_state.uploaded_docs
+        if current_docs:
+            filename, fulltext = next(iter(current_docs.items()))
+            st.markdown(f"**正在学习：{filename}**")
+            st.caption(f"已提取约 {len(fulltext):,} 个字符 · 仅在当前会话中临时使用 · 文件效力需自行核实")
+            if st.button("移除当前文件", key="clear_study_file"):
+                st.session_state.uploaded_docs = {}
+                st.session_state.last_upload_id = ""
+                st.session_state.study_result_query = ""
+                st.session_state.upload_widget_version += 1
                 st.rerun()
-
-    if page == "🏠 客户经理工作台":
-        st.subheader("综合客户经理工作台")
-        st.write("围绕客户走访、贷款调查、账户服务、贷后检查和消费者权益保护，提供结构化工作辅助。")
-        cols = st.columns(4)
-        cols[0].metric("工作流模板", f"{len(WORKFLOWS)} 类")
-        cols[1].metric("模拟制度版本", f"{len(policies)} 份")
-        cols[2].metric("公开监管索引", f"{len(REGULATORY_REFERENCES)} 项")
-        cols[3].metric("模型调用", "0 次")
-        st.markdown("### 快速问答")
-        for row in range(0, len(SAMPLE_QUESTIONS), 2):
-            c1, c2 = st.columns(2)
-            for offset, (col, question) in enumerate(zip((c1, c2), SAMPLE_QUESTIONS[row:row + 2])):
-                q_index = row + offset
-                col.button(question, use_container_width=True, key=f"home_q_{q_index}",
-                           on_click=navigate_to, args=("💬 智能制度问答", question, None))
-        st.markdown("### 常用工作流")
-        for row in range(0, len(WORKFLOWS), 2):
-            c1, c2 = st.columns(2)
-            names = list(WORKFLOWS)[row:row + 2]
-            for offset, (col, name) in enumerate(zip((c1, c2), names)):
-                with col.container(border=True):
-                    st.markdown(f"**{name}**")
-                    st.caption(WORKFLOWS[name]["description"])
-                    target = "🔎 贷后检查记录" if name == "贷后检查与风险回访" else "📝 业务调查记录"
-                    st.button("打开工作流", key=f"open_workflow_{row + offset}", use_container_width=True,
-                              on_click=navigate_to, args=(target, None, name))
-        st.info("推荐使用顺序：先用公开/模拟资料测试问答，再用工作流生成记录草稿，最后由经办人员核实。")
-
-    elif page == "💬 智能制度问答":
-        st.subheader("制度与业务知识问答")
-        st.caption("支持连续追问；优先匹配模拟制度、当前会话导入资料及公开监管资料索引。")
-        if not st.session_state.chat_history:
-            st.info("当前是规则检索增强版，不调用大模型。检索结果会标注模拟制度、公开监管摘要或会话临时资料。")
-        for entry in st.session_state.chat_history:
-            with st.chat_message(entry["role"]):
-                st.markdown(entry["content"])
-                if entry["role"] == "assistant":
-                    render_sources(st, entry.get("sources", []))
-        pending = st.session_state.pop("pending_question", None)
-        if pending:
-            ask(pending)
-            st.rerun()
-        question = st.chat_input("请输入业务问题，例如：小微企业流动资金贷款的调查重点有哪些？（不要输入真实客户信息）", max_chars=1500)
-        if question:
-            ask(question)
-            st.rerun()
-
-    elif page == "📝 业务调查记录":
-        st.subheader("客户经理业务调查与走访记录")
-        names = list(WORKFLOWS)
-        default_name = st.session_state.get("selected_workflow", names[0])
-        if default_name == "贷后检查与风险回访":
-            default_name = names[0]
-        workflow_name = st.selectbox("选择业务场景", names, index=names.index(default_name), format_func=lambda n: f"{WORKFLOWS[n]['group']}｜{n}")
-        template = WORKFLOWS[workflow_name]
-        st.caption(template["description"])
-        st.warning(template["caution"], icon="⚠️")
-        values: dict[str, str] = {}
-        with st.form(f"case_form_{workflow_name}"):
-            for section, placeholder in template["fields"]:
-                values[section] = st.text_area(section, placeholder=placeholder, height=75, key=f"field_{workflow_name}_{section}")
-            st.markdown("**核对清单**")
-            checked = []
-            for idx, item in enumerate(template["checklist"]):
-                if st.checkbox(item, key=f"case_check_{workflow_name}_{idx}"):
-                    checked.append(item)
-            st.markdown("**待进一步核查的信号（如适用）**")
-            selected_signals = []
-            for idx, signal in enumerate(template["signals"]):
-                if st.checkbox(signal, key=f"case_signal_{workflow_name}_{idx}"):
-                    selected_signals.append(signal)
-            submitted = st.form_submit_button("生成工作记录草稿", type="primary", use_container_width=True)
-        if submitted:
-            st.session_state.case_report = build_case_report(workflow_name, values, checked, selected_signals)
-            st.session_state.case_report_name = workflow_name
-        if st.session_state.case_report:
-            st.markdown("### 工作记录草稿预览")
-            st.markdown(st.session_state.case_report)
-            st.download_button("下载工作记录（Markdown）", st.session_state.case_report.encode("utf-8"), file_name="客户经理工作记录草稿.md", mime="text/markdown")
-
-    elif page == "📋 业务核对清单":
-        st.subheader("业务核对清单")
-        workflow_name = st.selectbox("选择业务场景", list(WORKFLOWS), key="checklist_workflow")
-        template = WORKFLOWS[workflow_name]
-        st.warning("以下为通用信息核对提纲，不是强制材料清单。实际要求以本行正式制度、具体产品和授权流程为准。", icon="⚠️")
-        marked = []
-        for idx, item in enumerate(template["checklist"]):
-            if st.checkbox(item, key=f"list_{workflow_name}_{idx}"):
-                marked.append(item)
-        st.progress(len(marked) / max(1, len(template["checklist"])), text=f"已核对 {len(marked)} / {len(template['checklist'])} 项")
-        text = f"# {workflow_name}｜通用核对提纲\n\n" + "\n".join(f"- [{'x' if x in marked else ' '}] {x}" for x in template["checklist"])
-        text += f"\n\n边界：{template['caution']}\n"
-        st.download_button("下载核对清单", text.encode("utf-8"), file_name="业务核对清单.md", mime="text/markdown")
-
-    elif page == "🔎 贷后检查记录":
-        st.subheader("贷后检查与风险回访")
-        template = WORKFLOWS["贷后检查与风险回访"]
-        st.warning(template["caution"], icon="⚠️")
-        values = {}
-        with st.form("post_loan_form"):
-            for section, placeholder in template["fields"]:
-                values[section] = st.text_area(section, placeholder=placeholder, height=72, key=f"post_{section}")
-            st.markdown("**检查清单**")
-            checked = [item for idx, item in enumerate(template["checklist"]) if st.checkbox(item, key=f"post_check_{idx}")]
-            st.markdown("**待核查信号**")
-            signals = [item for idx, item in enumerate(template["signals"]) if st.checkbox(item, key=f"post_signal_{idx}")]
-            submitted = st.form_submit_button("生成贷后检查记录草稿", type="primary", use_container_width=True)
-        if submitted:
-            st.session_state.post_loan_report = build_case_report("贷后检查与风险回访", values, checked, signals)
-        if st.session_state.get("post_loan_report"):
-            st.markdown(st.session_state.post_loan_report)
-            st.download_button("下载贷后检查草稿", st.session_state.post_loan_report.encode("utf-8"), file_name="贷后检查记录草稿.md", mime="text/markdown")
-
-    elif page == "📂 制度资料导入":
-        st.subheader("临时资料导入与检索")
-        st.warning("当前部署在 Streamlit Community Cloud。此处仅可上传公开、模拟或已脱敏且获准外传的资料；禁止上传真实客户信息、内部保密制度、征信资料、账户流水等。上传内容仅保存在当前会话内存中，刷新/会话结束后可能丢失，不会写入仓库文件。", icon="🔒")
-        allowed = st.checkbox("我确认本次仅上传公开、模拟或已获准外传的非敏感资料。")
-        files = st.file_uploader("选择资料文件", type=["pdf", "docx", "txt", "md", "json"], accept_multiple_files=True, disabled=not allowed)
-        if files:
-            for uploaded in files:
-                try:
-                    text = extract_uploaded_text(uploaded.name, uploaded.getvalue())
-                    if text.strip():
-                        st.session_state.uploaded_docs[uploaded.name] = text
-                        st.success(f"已载入 {uploaded.name}，约 {len(text)} 个字符（当前会话临时保存）。")
-                    else:
-                        st.warning(f"{uploaded.name} 未提取到文本，可能是扫描版 PDF；请先 OCR 后上传可搜索文本。")
-                except Exception as exc:
-                    st.error(f"{uploaded.name} 解析失败：{exc}")
-        if st.session_state.uploaded_docs:
-            st.markdown("### 当前会话资料")
-            for filename, text in list(st.session_state.uploaded_docs.items()):
-                with st.expander(f"{filename} · {len(text)} 字符"):
-                    st.write(text[:1800] + ("……" if len(text) > 1800 else ""))
-                    if st.button("移除此资料", key=f"remove_{filename}"):
-                        del st.session_state.uploaded_docs[filename]
-                        st.rerun()
-            st.info("资料已进入当前会话检索范围。请到“智能制度问答”中提问。上传文件的制度效力、版本和适用范围必须人工核验。")
-
-    elif page == "📚 公开监管目录":
-        st.subheader("公开监管法规索引")
-        st.caption("本目录是公开来源导航，不等于本行制度库，也不代表对某一业务的完整法律意见。")
-        for ref in REGULATORY_REFERENCES:
-            with st.container(border=True):
-                st.markdown(f"**{ref['title']}**")
-                st.caption(f"{ref['issuer']}｜{ref['number']}｜{ref['date']}")
-                st.write(ref["summary"])
-                st.markdown(f"[打开监管部门原文]({ref['url']})")
-                st.caption("关联主题：" + "、".join(ref["tags"]))
-
-    elif page == "🔁 模拟制度版本对比":
-        st.subheader("模拟制度版本对比")
-        versions = list_versions(policies)
-        if not versions:
-            st.info("当前模拟知识库没有可比较的多版本制度。")
+            highlights = learning_highlights(fulltext)
+            if highlights:
+                st.markdown("#### 先看这些原文重点")
+                st.caption("以下为按关键词选取的原文句子，不是 AI 摘要或合规结论。")
+                for i, sentence in enumerate(highlights, 1):
+                    st.markdown(f"**{i}.** {sentence}")
+            else:
+                st.info("未找到明显的重点表述，你可以在下面按问题搜索原文。")
+            headings = learning_headings(fulltext)
+            if headings:
+                with st.expander("查看文件章节线索"):
+                    for title in headings:
+                        st.write(title)
+            notes = "# 制度学习摘录｜" + filename + "\n\n" + "\n\n".join(f"{i}. {x}" for i,x in enumerate(highlights, 1))
+            st.download_button("⬇️ 下载学习摘录", notes.encode("utf-8"),
+                               file_name="智规通_制度学习摘录.md", mime="text/markdown", key="study_download")
         else:
-            pid = st.selectbox("选择制度", list(versions), format_func=lambda x: DOMAIN_NAMES.get(x, x))
-            pair = versions[pid]
-            old, new = pair[0], pair[-1]
-            st.caption(f"旧版：{old['version']}（{old.get('effective_date', '未标注')}）｜新版：{new['version']}（{new.get('effective_date', '未标注')}）")
-            changes = compare_versions(old, new)
-            st.metric("条款差异数", sum(1 for x in changes if x["status"] != "未变化"))
-            for item in changes:
-                with st.expander(f"第 {item['section_id']} 条｜{item['title']}｜{item['status']}"):
-                    c1, c2 = st.columns(2)
-                    c1.markdown("**旧版原文**")
-                    c1.write(item["old_text"])
-                    c2.markdown("**新版原文**")
-                    c2.write(item["new_text"])
-            st.caption("当前对比对象均为虚构模拟制度，不代表任何真实制度修订。")
+            st.info("还没有上传文件。你可以先用下面的搜索框，体验公开监管资料和模拟制度检索。")
+
+        st.markdown("#### 找相关条款")
+        with st.form("minimal_study_search"):
+            question = st.text_input("你想了解什么？",
+                                     placeholder="例如：贷款尽职调查要核实哪些内容？",
+                                     max_chars=300)
+            submitted = st.form_submit_button("查找原文", type="primary", use_container_width=True)
+        if submitted:
+            st.session_state.study_result_query = question.strip()
+        query = st.session_state.study_result_query
+        if query:
+            if current_docs:
+                filename, fulltext = next(iter(current_docs.items()))
+                references = doc_hits(filename, fulltext, query)
+            else:
+                references = retrieve_knowledge(query, policies)["sources"]
+            if references:
+                st.caption(f"找到 {len(references)} 处相关材料。请打开并结合上下文核对。")
+                for i, source in enumerate(references, 1):
+                    label = source.get("doc", "资料")
+                    section_id = source.get("section_id", "")
+                    with st.expander(f"{i}. {label}｜{section_id}", expanded=(i == 1)):
+                        st.write(source.get("content", ""))
+                        st.caption("来源：" + source.get("source_type", "未标注") +
+                                   " · 版本：" + source.get("version", "待核实"))
+                        if source.get("url"):
+                            st.markdown(f"[查看监管部门公开原文]({source['url']})")
+            else:
+                st.warning("没有查到足够相关的原文。可以换个关键词，或补充业务类型及办理环节。")
+        with st.expander("几个常见制度词，怎么理解？"):
+            st.markdown("**应当 / 必须**：一般表达义务要求，需核对适用对象、条件与例外。")
+            st.markdown("**不得 / 严禁**：一般表达禁止要求，特别注意禁止的具体行为。")
+            st.markdown("**尽职调查**：重点是按适用要求开展核实，并保留充分、可复核的过程与证据。")
+            st.markdown("**按权限审批**：需核对本行现行授权、审批岗位和流程，不能由系统代为判断。")
+            st.caption("这些是通用学习提示，不代表对某份具体条款的权威解释。")
+
+    elif page == "🧭 查流程":
+        st.subheader("查合规流程")
+        st.caption("选择业务，先看通用处理思路，再核对关键事项。")
+        names = list(WORKFLOWS)
+        workflow = st.selectbox("业务类型", names, key="flow_workflow")
+        template = WORKFLOWS[workflow]
+        st.caption(template["description"])
+        st.markdown("#### 通用办理思路")
+        steps = ["确认业务类型，查找现行适用制度", "明确岗位职责、授权和业务办理条件",
+                 "按照适用要求开展核验并记录证据来源", "对异常或疑点补充调查、按权限报告",
+                 "整理办理记录，按本行流程复核和归档"]
+        for i, step in enumerate(steps, 1):
+            st.markdown(f"**{i:02d}**　{step}")
+        st.markdown("#### 重点核对事项")
+        for line in template["checklist"]:
+            st.markdown(f"- {line}")
+        with st.expander("容易忽视的风险线索"):
+            for signal in template["signals"]:
+                st.markdown(f"- {signal}")
+        st.caption("⚠️ 此处是通用学习提纲，不等于本行正式、完整的合规流程。")
+        st.button("下一步：打开尽调核对表", type="primary", use_container_width=True,
+                  on_click=open_page, args=("✅ 做尽调", workflow))
 
     else:
-        st.subheader("系统说明与部署建议")
-        st.markdown("""
-        ### 当前版本的能力边界
-        - 本版本是**规则检索 + 业务工作流模板**，没有调用大语言模型，不会产生模型 Token 费用。
-        - 支持原有模拟制度条款检索、公开监管来源索引、当前会话资料检索、客户经理调查/走访/贷后/投诉记录草稿。
-        - PDF/DOCX/TXT/MD/JSON 上传内容只在当前 Streamlit 会话内存中处理；当前版本不提供长期保存、用户权限体系或审批流程。
-        - 上传资料检索采用关键词、中文字符片段和标题权重排序，不是向量语义 RAG，也不等于 AI 理解。
-
-        ### 本行制度接入的建议流程
-        1. 由本行制度归口部门确认资料范围、有效版本、适用机构、授权岗位和可使用场景。
-        2. 由科技/信息安全/合规部门评估部署位置、数据分类分级、访问权限、日志审计、备份和模型/供应商管理。
-        3. 先用公开法规、模拟资料或脱敏样本开展验证；不要把真实客户资料上传到个人公网应用。
-        4. 获批后再建设持久化知识库、员工身份认证、角色权限和审批闭环。
-
-        ### 在个人电脑或普通服务器运行
-        ```bash
-        pip install -r requirements.txt
-        streamlit run app.py
-        ```
-        默认仅供本机演示。若要让其他人访问，应由机构 IT 配置受控网络、HTTPS、身份认证、访问控制和日志审计，不要直接暴露公网端口。
-        """)
+        st.subheader("做尽调")
+        st.caption("按业务场景逐项检查，查看遗漏，导出个人学习核对表。")
+        names = list(WORKFLOWS)
+        workflow = st.selectbox("业务类型", names, key="diligence_workflow")
+        template = WORKFLOWS[workflow]
+        workflow_id = names.index(workflow)
+        checked = []
+        for i, label in enumerate(template["checklist"]):
+            if st.checkbox(label, key=f"simple_check_{workflow_id}_{i}"):
+                checked.append(label)
+        st.progress(len(checked)/len(template["checklist"]),
+                    text=f"已勾选 {len(checked)} / {len(template['checklist'])} 项（仅代表自查进度）")
+        with st.expander("需要继续核实的疑点（可选）"):
+            signals = []
+            for i, signal in enumerate(template["signals"]):
+                if st.checkbox(signal, key=f"simple_signal_{workflow_id}_{i}"):
+                    signals.append(signal)
+        notes = st.text_area("学习备注（可选）", placeholder="例如：本次还需要补查哪些资料？请勿输入真实客户信息。",
+                             height=90, key=f"simple_notes_{workflow_id}")
+        output = simple_checklist_report(workflow, checked, signals, notes)
+        st.download_button("⬇️ 下载尽调学习核对表", output.encode("utf-8"),
+                           file_name="智规通_尽调学习核对表.md", mime="text/markdown",
+                           use_container_width=True)
+        st.caption("⚠️ 勾选全部事项也不代表完成尽职调查。需以本行现行制度、实际证据和审核结果为准。")
 
     st.divider()
-    st.caption(f"智规通 {APP_VERSION}｜成员行社通用演示配置｜规则检索与工作流模板｜无大模型 API｜不构成真实业务决策")
+    with st.expander("📚 公开监管参考与使用说明"):
+        st.caption("以下是公开监管文件的来源入口，不等于本行内部制度，也不意味着适用于所有业务场景。")
+        for ref in REGULATORY_REFERENCES:
+            st.markdown(f"- [{ref['title']}]({ref['url']})")
+        st.markdown("**当前版本的能力**：可提取文本、识别疑似重点句、检索相关原文和使用通用清单。")
+        st.markdown("**尚未具备的能力**：没有接入大语言模型，不具备真正的逐条白话智能讲解，也不能自动认定流程合规或调查充分。")
+        st.markdown("**资料安全**：资料仅用于当前会话的临时内存处理，当前网站是公开托管的演示环境；勿上传保密制度、客户信息或真实尽调资料。")
+    st.caption(f"智规通 {APP_VERSION} · 制度学习与工作辅助演示 · 非正式合规意见")
 
 
 if __name__ == "__main__":
